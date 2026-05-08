@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Archer Elite: Trials of Hell</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #0f172a; color: white; overflow-x: hidden; user-select: none; font-family: 'Segoe UI', sans-serif; }
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 60vh;
+            background: linear-gradient(#020617, #000);
+            border-bottom: 15px solid #16a34a;
+            cursor: crosshair;
+            overflow: hidden;
+        }
+        .stickman { position: absolute; font-size: 2.5rem; z-index: 5; transition: transform 0.1s; }
+        #player { bottom: 0px; left: 40px; }
+        .platform { position: absolute; height: 12px; background: #334155; border-radius: 6px; box-shadow: 0 4px #1e293b; }
+        .arrow { position: absolute; width: 30px; height: 3px; background: #fbbf24; border-radius: 2px; pointer-events: none; }
+        .enemy-arrow { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+        
+        #charge-meter {
+            position: absolute; width: 60px; height: 8px; background: #333; border: 1px solid #fff;
+            display: none; pointer-events: none; z-index: 100;
+        }
+        #charge-fill { height: 100%; width: 0%; background: #38bdf8; }
+        /* Estilo para el indicador de cooldown */
+        #cooldown-indicator {
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            font-size: 0.8rem; color: #64748b; font-weight: bold;
+        }
+        .heart { color: #f43f5e; font-size: 1.5rem; margin: 0 2px; }
+        
+        .diff-tag { padding: 5px 15px; border-radius: 20px; font-weight: bold; text-transform: uppercase; font-size: 0.8rem; }
+        .diff-facil { background: #22c55e; color: white; }
+        .diff-intermedio { background: #eab308; color: black; }
+        .diff-dificil { background: #ef4444; color: white; }
+        .diff-infierno { background: #7c3aed; color: white; box-shadow: 0 0 15px #7c3aed; animation: pulse 1s infinite; }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div class="container mt-3">
+    <div class="row align-items-center bg-dark p-3 rounded-top border-bottom border-secondary shadow">
+        <div class="col-4" id="hp-container"></div>
+        <div class="col-4 text-center">
+            <div class="h2 m-0 fw-bold" id="timer" style="color: #10b981; font-family: monospace;">00:00</div>
+        </div>
+        <div class="col-4 text-end">
+            <span id="diff-label" class="diff-tag diff-facil">FÁCIL</span>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <div id="player" class="stickman">🧍‍♂️🏹</div>
+        <div id="charge-meter"><div id="charge-fill"></div></div>
+        <div id="cooldown-indicator">LISTO</div>
+    </div>
+
+    <div class="row mt-3 mb-5">
+        <div class="col-md-4">
+            <div class="card bg-dark text-white p-3 border-secondary h-100 shadow">
+                <h4 class="text-warning">BAJAS: <span id="score">0</span></h4>
+                <div id="next-phase" class="text-muted small mt-2">Siguiente fase en: 30s</div>
+                <div class="mt-2 text-info small">Moverse: [A][D] | Cooldown: 0.5s</div>
+            </div>
+        </div>
+        
+        <div class="col-md-8">
+            <div class="ranking-container bg-dark p-3 rounded border border-secondary">
+                <h5 class="text-info border-bottom border-secondary pb-2">🏆 TOP RANKING</h5>
+                <table class="table table-dark table-sm mt-2 mb-0">
+                    <thead><tr><th>#</th><th>Bajas</th><th>Tiempo</th><th>Fecha</th></tr></thead>
+                    <tbody id="ranking-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const container = document.getElementById('game-container');
+    const player = document.getElementById('player');
+    const hpContainer = document.getElementById('hp-container');
+    const timerElement = document.getElementById('timer');
+    const scoreElement = document.getElementById('score');
+    const rankingBody = document.getElementById('ranking-body');
+    const diffLabel = document.getElementById('diff-label');
+    const nextPhaseLabel = document.getElementById('next-phase');
+    const cooldownLabel = document.getElementById('cooldown-indicator');
+
+    let score = 0;
+    let hp = 5;
+    let gameActive = true;
+    let isCharging = false;
+    let canShoot = true; // Variable para el cooldown
+    let chargeStartTime = 0;
+    let secondsElapsed = 0;
+    const gravity = 0.2;
+
+    // --- Movimiento ---
+    let playerPos = 40;
+    const playerSpeed = 8;
+    const keys = {};
+
+    window.addEventListener('keydown', (e) => keys[e.code] = true);
+    window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    function updateMovement() {
+        if (!gameActive) return;
+        if (keys['KeyA'] || keys['ArrowLeft']) playerPos = Math.max(0, playerPos - playerSpeed);
+        if (keys['KeyD'] || keys['ArrowRight']) playerPos = Math.min(container.offsetWidth - 60, playerPos + playerSpeed);
+        player.style.left = playerPos + 'px';
+        requestAnimationFrame(updateMovement);
+    }
+    updateMovement();
+
+    const difficulties = [
+        { name: 'Fácil', class: 'diff-facil', error: 150, spawn: 4000 },
+        { name: 'Intermedio', class: 'diff-intermedio', error: 80, spawn: 3000 },
+        { name: 'Difícil', class: 'diff-dificil', error: 30, spawn: 2000 },
+        { name: 'Infierno', class: 'diff-infierno', error: 0, spawn: 1500 }
+    ];
+    let currentDiffIdx = 0;
+
+    setInterval(() => {
+        if (!gameActive) return;
+        secondsElapsed++;
+        const m = Math.floor(secondsElapsed / 60).toString().padStart(2, '0');
+        const s = (secondsElapsed % 60).toString().padStart(2, '0');
+        timerElement.innerText = `${m}:${s}`;
+        if (secondsElapsed % 30 === 0 && currentDiffIdx < difficulties.length - 1) {
+            currentDiffIdx++;
+            updateDiffUI();
+        }
+    }, 1000);
+
+    function updateDiffUI() {
+        const d = difficulties[currentDiffIdx];
+        diffLabel.innerText = d.name;
+        diffLabel.className = `diff-tag ${d.class}`;
+    }
+
+    // --- Lógica de Disparo con Cooldown ---
+    container.addEventListener('mousedown', (e) => {
+        if (!gameActive || !canShoot) return; // Bloqueo si está en cooldown
+        isCharging = true;
+        chargeStartTime = Date.now();
+        document.getElementById('charge-meter').style.display = 'block';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if(isCharging) {
+            const m = document.getElementById('charge-meter');
+            const rect = container.getBoundingClientRect();
+            m.style.left = (e.clientX - rect.left + 20) + 'px';
+            m.style.top = (e.clientY - rect.top + 20) + 'px';
+            document.getElementById('charge-fill').style.width = (Math.min(Date.now() - chargeStartTime, 1200) / 1200 * 100) + '%';
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (!isCharging || !gameActive) return;
+        
+        // Ejecutar disparo
+        const dur = Math.min(Date.now() - chargeStartTime, 1200);
+        const pwr = 0.8 + (dur / 1200) * 1.5;
+        const rect = container.getBoundingClientRect();
+        const startX = playerPos + 30;
+        const startY = container.offsetHeight - 50;
+        const dx = (e.clientX - rect.left) - startX;
+        const dy = (e.clientY - rect.top) - startY;
+        const angle = Math.atan2(dy, dx);
+        
+        fireArrow(startX, startY, Math.cos(angle) * 15 * pwr, Math.sin(angle) * 15 * pwr, true);
+        
+        // Activar Cooldown
+        isCharging = false;
+        canShoot = false;
+        document.getElementById('charge-meter').style.display = 'none';
+        cooldownLabel.innerText = "RECARGANDO...";
+        cooldownLabel.style.color = "#ef4444";
+
+        setTimeout(() => {
+            canShoot = true;
+            cooldownLabel.innerText = "LISTO";
+            cooldownLabel.style.color = "#10b981";
+        }, 500); // 0.5 segundos de cooldown
+    });
+
+    function fireArrow(x, y, vx, vy, isPlayer) {
+        const arrow = document.createElement('div');
+        arrow.className = isPlayer ? 'arrow' : 'arrow enemy-arrow';
+        container.appendChild(arrow);
+
+        function update() {
+            if (!gameActive) { arrow.remove(); return; }
+            vy += gravity; x += vx; y += vy;
+            arrow.style.left = x + 'px'; arrow.style.top = y + 'px';
+            arrow.style.transform = `rotate(${Math.atan2(vy, vx)}rad)`;
+
+            if (isPlayer) {
+                if(checkHit(x, y)) { arrow.remove(); return; }
+            } else {
+                if(checkPlayerHit(x, y)) { arrow.remove(); return; }
+            }
+
+            if (x < -50 || x > container.offsetWidth + 50 || y > container.offsetHeight) arrow.remove();
+            else requestAnimationFrame(update);
+        }
+        requestAnimationFrame(update);
+    }
+
+    // --- IA Sniper (Fija a 1s de spawn) ---
+    function spawn() {
+        if (!gameActive) return;
+        const px = container.offsetWidth - (150 + Math.random() * 300);
+        const py = 100 + Math.random() * (container.offsetHeight - 250);
+        
+        const plat = document.createElement('div');
+        plat.className = 'platform';
+        const platId = "p" + Math.random().toString(36).substr(2, 5);
+        plat.id = platId; plat.style.width = '110px'; plat.style.left = px + 'px'; plat.style.top = py + 'px';
+        container.appendChild(plat);
+
+        const en = document.createElement('div');
+        en.className = 'stickman enemy'; en.innerHTML = '🏹🏃‍♂️';
+        en.style.left = px + 'px'; en.style.top = (py - 50) + 'px'; en.dataset.plat = platId;
+        container.appendChild(en);
+
+        const aiInterval = setInterval(() => {
+            if (!en.parentNode || !gameActive) { clearInterval(aiInterval); return; }
+            
+            const targetX = playerPos + 25; 
+            const targetY = container.offsetHeight - 40;
+            const dx = targetX - px;
+            const dy = targetY - (py - 30);
+            
+            const v = 16;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const time = dist / v;
+            const gComp = 0.5 * gravity * Math.pow(time, 2);
+            
+            const angle = Math.atan2(dy - gComp, dx);
+            const error = (difficulties[currentDiffIdx].error / 100) * (Math.random() - 0.5);
+            
+            fireArrow(px, py - 30, Math.cos(angle + error) * v, Math.sin(angle + error) * v, false);
+        }, 2500);
+
+        setTimeout(spawn, 1000); // Aparecen cada 1 segundo
+    }
+
+    function checkHit(x, y) {
+        const enemies = document.querySelectorAll('.enemy');
+        let hit = false;
+        enemies.forEach(en => {
+            const ex = parseFloat(en.style.left); const ey = parseFloat(en.style.top);
+            if (x > ex && x < ex + 60 && y > ey && y < ey + 60) {
+                const p = document.getElementById(en.dataset.plat);
+                if (p) p.remove();
+                en.remove(); hit = true; score++; scoreElement.innerText = score;
+                if (hp < 5) { hp = Math.min(5, hp + 0.2); updateHP(); }
+            }
+        });
+        return hit;
+    }
+
+    function checkPlayerHit(x, y) {
+        if (x > playerPos && x < playerPos + 50 && y > container.offsetHeight - 70) {
+            hp--; updateHP();
+            container.style.boxShadow = "inset 0 0 40px #ef4444";
+            setTimeout(()=> container.style.boxShadow = "none", 150);
+            if (hp <= 0) endGame();
+            return true;
+        }
+        return false;
+    }
+
+    function updateHP() {
+        hpContainer.innerHTML = '';
+        for (let i = 1; i <= 5; i++) {
+            const s = document.createElement('span'); s.className = 'heart';
+            s.innerText = i <= Math.floor(hp) ? '❤️' : (i - 0.5 <= hp ? '🧡' : '🖤');
+            hpContainer.appendChild(s);
+        }
+    }
+
+    function endGame() {
+        gameActive = false;
+        let ranking = JSON.parse(localStorage.getItem('archerRankFinal')) || [];
+        ranking.push({ score, time: timerElement.innerText, date: new Date().toLocaleDateString() });
+        ranking.sort((a, b) => b.score - a.score).splice(5);
+        localStorage.setItem('archerRankFinal', JSON.stringify(ranking));
+        alert(`GAME OVER\nBajas: ${score}`);
+        location.reload();
+    }
+
+    function loadRanking() {
+        const ranking = JSON.parse(localStorage.getItem('archerRankFinal')) || [];
+        rankingBody.innerHTML = ranking.map((r, i) => `<tr><td>${i+1}</td><td class="text-warning fw-bold">${r.score}</td><td>${r.time}</td><td>${r.date}</td></tr>`).join('');
+    }
+
+    updateHP(); loadRanking(); spawn();
+</script>
+</body>
+</html>
